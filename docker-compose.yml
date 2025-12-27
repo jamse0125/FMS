@@ -1,8 +1,9 @@
 services:
+  # 브로커
   mosquitto:
     image: eclipse-mosquitto:latest
     container_name: my_mqtt_broker
-    restart: always
+    restart: always  # 컨테이너가 중지되었을 때 자동 재시작
     ports:
       - "1883:1883"  # 파이썬 통신용
       - "8083:8083"  # 웹소켓 통신용
@@ -10,6 +11,51 @@ services:
     volumes:
       # 위에서 만든 설정 파일을 컨테이너 내부로 연결
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  # 데이터베이스
+  mysql:
+    # MySQL 9.0 공식 Docker 이미지는 Debian 12 (bookworm) 기반 Linux용
+    image: container-registry.oracle.com/mysql/community-server:9.0 # arm64v8 지원 안됨
+    # image: mariadb:10.11  # ARM(t4g)에서 매우 잘 돌아감. MySQL 호환됨.
+    container_name: iot-mysql
+    restart: unless-stopped               # 컨테이너가 중지되었을 때 자동 재시작. 수동 중지(docker stop) 시에는 재시작 안함.
+    environment:
+      # MYSQL_ROOT_PASSWORD: RootSecret943 # 루트 비밀번호 설정. 안하면 컨테이너 실행 불가. MySQL 공식 Docker 이미지 요구사항.
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"   # 루트 비밀번호 랜덤 생성. 보안 강화용. 위의 루트 비번 설정과 둘 중 하나만 사용.
+      MYSQL_DATABASE: iot-db              # 최초 생성할 데이터베이스 이름. 이미 디비가 있으면 그냥 사용함 (덮어쓰기 없음)
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: 1234abcd!@#$
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql         # mysql_data는 도커가 호스트에 자동으로 만드는 폴더
+    command: --default-time-zone=Asia/Seoul
+
+  # 백엔드 서비스
+  backend:
+    build: ./backend  # 개발용! backend 폴더의 Dockerfile 사용
+    # image: my-company/iot-backend:v1.0.0  # 운영용! 빌드된 이미지 사용
+    container_name: iot-backend
+    restart: always
+    environment:
+      # 코드 내 os.getenv()와 매칭되는 변수들
+      - MQTT_BROKER=mosquitto
+      - MQTT_TOPIC=factory/agv/+
+      - DB_HOST=iot-mysql
+      - DB_NAME=iot-db
+      - DB_USER=test_user
+      - DB_PASSWORD=1234abcd!@#$
+      # 타임존 설정 (DB와 시간 맞추기 위함)
+      - TZ=Asia/Seoul
+    depends_on:
+      - mosquitto
+      - mysql
+    volumes:
+      # 개발용! 운영 환경에서는 주석 처리.
+      - ./backend:/app  # 호스트의 backend 폴더를 컨테이너의 /app 폴더에 연결 (코드 변경 즉시 반영용)
+
+volumes:
+  mysql_data:
 
 
 #----------------------------------------------------------
@@ -19,6 +65,10 @@ services:
 
 # 컨테이너 중지 및 삭제 명령어
 # docker-compose down
+
+# --remove-orphans: docker-compose 파일에서 사라진 서비스(collector)의 컨테이너를 삭제함
+# docker-compose down --remove-orphans
+
 
 # 현재 브로커로 전송되는 데이터 확인
 # mosquitto_sub : MQTT 구독
